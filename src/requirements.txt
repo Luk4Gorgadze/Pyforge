@@ -4,3 +4,5 @@ pydantic
 python-multipart
 pytest
 httpx
+flake8
+rdkit
