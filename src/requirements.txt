@@ -6,3 +6,6 @@ pytest
 httpx
 flake8
 rdkit
+sqlalchemy
+databases
+aiosqlite

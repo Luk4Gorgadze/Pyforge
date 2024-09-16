@@ -1,16 +1,33 @@
-from os import getenv
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+from sqlalchemy.orm import Session
+from src.mydb.database import Base, SessionLocal, engine, database
+from src.mydb.models import Molecule
 from pydantic import BaseModel
-from typing import Dict
 from rdkit import Chem
+from os import getenv
 
 app = FastAPI()
 
-molecules_db: Dict[str, str] = {}
+# Create the database tables
+Base.metadata.create_all(bind=engine)
+
+# Dependency to get the database session
 
 
-class Molecule(BaseModel):
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+class MoleculeCreate(BaseModel):
     identifier: str
+    smiles: str
+
+
+class MoleculeUpdate(BaseModel):
     smiles: str
 
 
@@ -25,72 +42,96 @@ def validate_smiles(smiles: str):
     return molecule
 
 
-@app.post("/molecule/")
-def add_molecule(molecule: Molecule):
-    if molecule.identifier in molecules_db:
+@app.on_event("startup")
+async def startup():
+    await database.connect()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    await database.disconnect()
+
+
+@app.post("/molecule/", response_model=dict)
+def add_molecule(molecule: MoleculeCreate, db: Session = Depends(get_db)):
+    if db.query(Molecule).filter(Molecule.identifier == molecule.identifier).first():
         raise HTTPException(
-            status_code=400,
-            detail="Identifier already exists")
+            status_code=400, detail="Identifier already exists")
     validate_smiles(molecule.smiles)
-    molecules_db[molecule.identifier] = molecule.smiles
+    db_molecule = Molecule(
+        identifier=molecule.identifier, smiles=molecule.smiles)
+    db.add(db_molecule)
+    db.commit()
     return {"message": "Molecule added successfully"}
 
 
-@app.get("/molecule/{identifier}")
-def get_molecule(identifier: str):
-    if identifier not in molecules_db:
+@app.get("/molecule/{identifier}", response_model=dict)
+def get_molecule(identifier: str, db: Session = Depends(get_db)):
+    molecule = db.query(Molecule).filter(
+        Molecule.identifier == identifier).first()
+    if not molecule:
         raise HTTPException(status_code=404, detail="Molecule not found")
-    return {"identifier": identifier, "smiles": molecules_db[identifier]}
+    return {"identifier": molecule.identifier, "smiles": molecule.smiles}
 
 
-@app.put("/molecule/{identifier}")
-def update_molecule(identifier: str, molecule: Molecule):
-    if identifier not in molecules_db:
+@app.put("/molecule/{identifier}", response_model=dict)
+def update_molecule(identifier: str, molecule: MoleculeUpdate, db: Session = Depends(get_db)):
+    db_molecule = db.query(Molecule).filter(
+        Molecule.identifier == identifier).first()
+    if not db_molecule:
         raise HTTPException(status_code=404, detail="Molecule not found")
     validate_smiles(molecule.smiles)
-    molecules_db[identifier] = molecule.smiles
+    db_molecule.smiles = molecule.smiles
+    db.commit()
     return {"message": "Molecule updated successfully"}
 
 
-@app.delete("/molecule/{identifier}")
-def delete_molecule(identifier: str):
-    if identifier not in molecules_db:
+@app.delete("/molecule/{identifier}", response_model=dict)
+def delete_molecule(identifier: str, db: Session = Depends(get_db)):
+    db_molecule = db.query(Molecule).filter(
+        Molecule.identifier == identifier).first()
+    if not db_molecule:
         raise HTTPException(status_code=404, detail="Molecule not found")
-    del molecules_db[identifier]
+    db.delete(db_molecule)
+    db.commit()
     return {"message": "Molecule deleted successfully"}
 
 
-@app.get("/molecules/")
-def list_molecules():
-    return [{"identifier": identifier, "smiles": smiles}
-            for identifier, smiles in molecules_db.items()]
+@app.get("/molecules/", response_model=list)
+def list_molecules(db: Session = Depends(get_db)):
+    molecules = db.query(Molecule).all()
+    return [{"identifier": molecule.identifier, "smiles": molecule.smiles} for molecule in molecules]
 
 
-@app.post("/substructure_search/")
-def substructure_search(request: SubstructureSearchRequest):
+@app.post("/substructure_search/", response_model=list)
+def substructure_search(request: SubstructureSearchRequest, db: Session = Depends(get_db)):
     substructure = validate_smiles(request.substructure)
     result = []
-    for identifier, smiles in molecules_db.items():
-        molecule = Chem.MolFromSmiles(smiles)
-        if molecule.HasSubstructMatch(substructure):
-            result.append({"identifier": identifier, "smiles": smiles})
+    molecules = db.query(Molecule).all()
+    for molecule in molecules:
+        mol = Chem.MolFromSmiles(molecule.smiles)
+        if mol.HasSubstructMatch(substructure):
+            result.append({"identifier": molecule.identifier,
+                          "smiles": molecule.smiles})
     return result
 
 
-@app.post("/upload_molecules/")
-async def upload_molecules(file: UploadFile = File(...)):
+@app.post("/upload_molecules/", response_model=dict)
+async def upload_molecules(file: UploadFile = File(...), db: Session = Depends(get_db)):
     content = await file.read()
     content_str = content.decode("utf-8")
     lines = content_str.splitlines()
     for line in lines:
         identifier, smiles = line.split()
-        if identifier in molecules_db:
+        if db.query(Molecule).filter(Molecule.identifier == identifier).first():
             raise HTTPException(
                 status_code=400,
                 detail=f"Identifier {identifier} already exists"
             )
         validate_smiles(smiles)
-        molecules_db[identifier] = smiles
+        db_molecule = Molecule(identifier=identifier, smiles=smiles)
+        db.add(db_molecule)
+    db.commit()
     return {"message": "Molecules uploaded successfully"}
 
 

@@ -4,6 +4,7 @@ services:
     build: ./src
     volumes:
       - ./src:/src
+      - shared-db:/src/data
     environment:
       SERVER_ID: SERVER-1
 
@@ -11,6 +12,7 @@ services:
     build: ./src
     volumes:
       - ./src:/src
+      - shared-db:/src/data
     environment:
       SERVER_ID: SERVER-2
       
@@ -23,3 +25,7 @@ services:
     depends_on:
       - web1
       - web2
+
+volumes:
+  shared-db:
+    driver: local

@@ -14,10 +14,13 @@ RUN conda install -c conda-forge -y rdkit && \
 # Copy the application code
 COPY . /app
 
+
 ENV PYTHONPATH=/app/src
+
+RUN mkdir -p /src/data
 
 # Expose the port the app runs on
 EXPOSE 8000
 
 # Run the FastAPI application
-CMD ["uvicorn", "main.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
