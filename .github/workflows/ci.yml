@@ -51,7 +51,7 @@ jobs:
 
       - name: Run tests inside Docker container
         run: |
-          docker-compose exec web1 pytest src/tests
+          docker-compose exec -T web1 pytest src/tests
 
       - name: Stop and remove Docker Compose services
         run: |
