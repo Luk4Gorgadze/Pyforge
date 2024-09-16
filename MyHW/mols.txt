@@ -1,0 +1,10 @@
+mol1 CCO
+mol2 c1ccccc1
+mol3 CC(=O)O
+mol4 CC(=O)Oc1ccccc1C(=O)O
+mol5 C1=CC=CC=C1
+mol6 C1CCCCC1
+mol7 C1=CC=CN=C1
+mol8 C1=CC=CC=C1O
+mol9 C1=CC=CC=C1N
+mol10 C1=CC=CC=C1Cl
