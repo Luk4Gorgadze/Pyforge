@@ -1,17 +1,54 @@
 import logging
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+import redis
+import json
+from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy.orm import Session
-from src.mydb.database import Base, SessionLocal, engine, database
-from src.mydb.models import Molecule
+from mydb.database import Base, SessionLocal, engine, database
+from mydb.models import Molecule
 from pydantic import BaseModel
 from rdkit import Chem
 from os import getenv
+from .tasks import add_task
+from celery.result import AsyncResult
+from .celery_worker import celery
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+# Connect to Redis
+redis_client = redis.Redis(host='redis', port=6379, db=0)
+
+
+@app.post("/tasks/add")
+async def create_task(x: int, y: int):
+    task = add_task.delay(x, y)
+    return {"task_id": task.id, "status": task.status}
+
+
+@app.get("/tasks/{task_id}")
+async def get_task_result(task_id: str):
+    task_result = AsyncResult(task_id, app=celery)
+    if task_result.state == 'PENDING':
+        return {"task_id": task_id, "status": "Task is still processing"}
+    elif task_result.state == 'SUCCESS':
+        return {"task_id": task_id, "status": "Task completed", "result": task_result.result}
+    else:
+        return {"task_id": task_id, "status": task_result.state}
+
+
+def get_cached_result(key: str):
+    result = redis_client.get(key)
+    if result:
+        return json.loads(result)
+    return None
+
+
+def set_cache(key: str, value: dict, expiration: int = 60):
+    redis_client.setex(key, expiration, json.dumps(value))
+
 
 # Create the database tables
 Base.metadata.create_all(bind=engine)
@@ -114,15 +151,46 @@ def delete_molecule(identifier: str, db: Session = Depends(get_db)):
 
 
 @app.get("/molecules/", response_model=list)
-def list_molecules(db: Session = Depends(get_db)):
-    logger.info("Listing all molecules")
-    molecules = db.query(Molecule).all()
-    return [{"identifier": molecule.identifier, "smiles": molecule.smiles} for molecule in molecules]
+def list_molecules(limit: int = Query(1, ge=1), db: Session = Depends(get_db)):
+    logger.info(f"Listing up to {limit} molecules")
+
+    # Generate cache key
+    cache_key = f"molecules_{limit}"
+
+    # Check cache
+    cached_result = get_cached_result(cache_key)
+    if cached_result:
+        logger.info(f"Returning cached result for limit {limit}")
+        return cached_result
+
+    def molecule_iterator(limit):
+        offset = 0
+        while True:
+            molecules = db.query(Molecule).offset(offset).limit(limit).all()
+            if not molecules:
+                break
+            for molecule in molecules:
+                yield {"identifier": molecule.identifier, "smiles": molecule.smiles}
+            offset += limit
+
+    result = list(molecule_iterator(limit))
+
+    set_cache(cache_key, result)
+
+    return result
 
 
 @app.post("/substructure_search/", response_model=list)
 def substructure_search(request: SubstructureSearchRequest, db: Session = Depends(get_db)):
     logger.info(f"Performing substructure search for: {request.substructure}")
+
+    cache_key = f"substructure_search_{request.substructure}"
+
+    cached_result = get_cached_result(cache_key)
+    if cached_result:
+        logger.info(f"Returning cached result for substructure search: {request.substructure}")
+        return cached_result
+
     substructure = validate_smiles(request.substructure)
     result = []
     molecules = db.query(Molecule).all()
@@ -130,7 +198,11 @@ def substructure_search(request: SubstructureSearchRequest, db: Session = Depend
         mol = Chem.MolFromSmiles(molecule.smiles)
         if mol.HasSubstructMatch(substructure):
             result.append({"identifier": molecule.identifier, "smiles": molecule.smiles})
+
     logger.info(f"Substructure search completed with {len(result)} results")
+
+    set_cache(cache_key, result)
+
     return result
 
 

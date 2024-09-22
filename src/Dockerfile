@@ -15,7 +15,7 @@ RUN conda install -c conda-forge -y rdkit && \
 COPY . /app
 
 
-ENV PYTHONPATH=/app/src
+ENV PYTHONPATH=/app/
 
 RUN mkdir -p /src/data
 

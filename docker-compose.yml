@@ -25,6 +25,20 @@ services:
     depends_on:
       - web1
       - web2
+      - redis
+  
+  redis:
+    image: "redis:alpine"
+    ports:
+      - "6379:6379"
+
+  celery_worker:
+    build: ./src
+    command: celery -A main.celery_worker worker --loglevel=info
+    depends_on:
+      - redis
+    volumes:
+      - ./src:/src
 
 volumes:
   shared-db:
